@@ -1,0 +1,45 @@
+{
+  "name": "@pragmatic-tech-ai/pragmatic-host-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The host agent (pragmatic-host-agentd): enrols one of our hosting machines once, reports its capacity, and places, upgrades and removes Hosted hives on it (kind clusters, the engine chart, a sealed rotating cluster credential).",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pragmatic-tech-ai/pragmatic-host-agent.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "tsx --test \"src/**/*.test.ts\" \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json"
+  },
+  "dependencies": {
+    "@pragmatic-tech-ai/pragmatic-component": "^0.21.3",
+    "@pragmatic-tech-ai/pragmatic-hive-protocol": "^0.21.3",
+    "@pragmatic-tech-ai/pragmatic-observability": "^0.21.3"
+  },
+  "devDependencies": {
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.21.3",
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  },
+  "pragmaticClosureCheck": {
+    "Manifest": "closure.json",
+    "Dockerfile": "Dockerfile",
+    "Apps": [
+      "pragmatic-host-agent"
+    ]
+  },
+  "pragmaticContainerTemplate": {
+    "App": "pragmatic-host-agent",
+    "Entry": "src/bin/pragmatic-host-agentd.ts",
+    "ExtraCopies": [
+      "vendor"
+    ]
+  }
+}

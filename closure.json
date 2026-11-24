@@ -1,0 +1,7 @@
+{
+  "pragmatic-host-agent": {
+    "entrypoint": ["node", "dist/bin/pragmatic-host-agentd.js"],
+    "packages": [],
+    "files": ["pragmatic-host-agent/package.json", "pragmatic-host-agent/node_modules", "pragmatic-host-agent/dist", "pragmatic-host-agent/vendor"]
+  }
+}

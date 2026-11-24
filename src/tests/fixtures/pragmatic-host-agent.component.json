@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "component": "pragmatic-host-agent",
+  "version": "0.1.0",
+  "options": [
+    {
+      "name": "core",
+      "description": "The host agent of one hosting machine.",
+      "settings": [
+        {
+          "name": "stateDir",
+          "type": "string",
+          "required": false,
+          "secret": false,
+          "default": "/var/lib/pragmatic-host-agent",
+          "description": "PRAGMATIC_HOST_STATE_DIR: The directory the host key (mode 0600), the enrolment and the placements are kept in."
+        },
+        {
+          "name": "channelUrl",
+          "type": "url",
+          "required": false,
+          "secret": false,
+          "default": "https://agent.pragmatic-tech.ai",
+          "description": "PRAGMATIC_HOST_CHANNEL_URL: The platform agent channel the host enrols over (the enrolment answer names the one used after)."
+        },
+        {
+          "name": "machineName",
+          "type": "string",
+          "required": true,
+          "secret": false,
+          "description": "PRAGMATIC_HOST_MACHINE_NAME: The machine name the host enrols with (a DNS label)."
+        },
+        {
+          "name": "meshAddress",
+          "type": "string",
+          "required": true,
+          "secret": false,
+          "description": "PRAGMATIC_HOST_MESH_ADDRESS: The machine mesh address the platform reaches the hosted clusters API servers at."
+        },
+        {
+          "name": "hiveSlots",
+          "type": "integer",
+          "required": false,
+          "secret": false,
+          "default": 4,
+          "description": "PRAGMATIC_HOST_HIVE_SLOTS: How many Hosted hives the machine holds at most.",
+          "minimum": 1,
+          "maximum": 64
+        },
+        {
+          "name": "portRange",
+          "type": "string",
+          "required": false,
+          "secret": false,
+          "default": "16444-16463",
+          "description": "PRAGMATIC_HOST_PORT_RANGE: The API-server ports the clusters bind on 127.0.0.1, <first>-<last>."
+        },
+        {
+          "name": "enrolmentCode",
+          "type": "string",
+          "required": false,
+          "secret": true,
+          "description": "PRAGMATIC_HOST_ENROLMENT_CODE_FILE: The one-time host enrolment code from the platform admin console (read once, before enrolment)."
+        },
+        {
+          "name": "trustRootFile",
+          "type": "string",
+          "required": true,
+          "secret": false,
+          "description": "PRAGMATIC_HOST_TRUST_ROOT_FILE: The pinned platform signing key (public, PEM) the enrolment answer must be signed by."
+        }
+      ]
+    }
+  ],
+  "roles": [],
+  "storage": {
+    "postgres": false
+  },
+  "endpoints": {
+    "ports": []
+  }
+}
