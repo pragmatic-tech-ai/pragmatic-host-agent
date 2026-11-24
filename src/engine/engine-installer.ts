@@ -38,7 +38,7 @@ export class ChartDigestMismatchError extends Error
  * console.baseDomain (both the placement's HiveHostName: the sign-in service and the environments live under the hive's
  * own SNI label, nothing shared across hosted hives), console.address=relayed-hive-subdomain, tls.mode=self-signed. An
  * upgrade is helm only, `--atomic` (a failed one rolls back to the running release). Helm waits at most 15 minutes and
- * its process is killed at 20.
+ * its process is killed at 35 (more than twice the wait: an --atomic rollback waits the same 15 minutes again).
  */
 export class EngineInstaller
 {
@@ -49,7 +49,9 @@ export class EngineInstaller
     public static readonly CodeKey = 'code'
     public static readonly ChartsDir = 'charts'
     public static readonly HelmWait = '15m'
-    public static readonly HelmProcessTimeoutMs = 20 * 60 * 1000
+    /** More than twice HelmWait: a failed --atomic upgrade rolls back under the same wait, and helm must finish that. */
+    public static readonly HelmProcessTimeoutMs = 35 * 60 * 1000
+    public static readonly HelmWaitMs = 15 * 60 * 1000
     public static readonly PullTimeoutMs = 5 * 60 * 1000
     private static readonly Helm = 'helm'
     private static readonly Pull = 'pull'

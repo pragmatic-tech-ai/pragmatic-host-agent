@@ -1,28 +1,18 @@
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
 import { after, describe, it } from 'node:test'
-import { StateLock, StateLockHeldError, type IProcessTable } from '../state-lock.js'
+import { StateLock, StateLockHeldError } from '../state-lock.js'
 import { TempState } from '../../tests/fakes.js'
-
-class FakeProcesses implements IProcessTable
-{
-    public readonly Alive = new Set<number>()
-
-    public constructor(public readonly OwnPid: number)
-    {
-        this.Alive.add(OwnPid)
-    }
-
-    public IsAlive(pid: number): boolean
-    {
-        return this.Alive.has(pid)
-    }
-}
 
 class LockFixture
 {
     public Now = new Date('2026-11-25T10:00:00.000Z')
     public readonly Clock = (): Date => this.Now
+
+    public Advance(ms: number): void
+    {
+        this.Now = new Date(this.Now.getTime() + ms)
+    }
 }
 
 describe('StateLock', () =>
@@ -36,43 +26,39 @@ describe('StateLock', () =>
         return state
     }
 
-    it('a second agent on the same state directory refuses to start', async () =>
+    it('a second agent on the same state directory refuses to start while the holder heartbeats', async () =>
     {
         const state = fresh()
         const f = new LockFixture()
-        const shared = new FakeProcesses(1)
-        await new StateLock(state.Files, f.Clock, shared).Acquire()
-        // Another container: its pid 1 is alive too, and the heartbeat is fresh.
-        await assert.rejects(new StateLock(state.Files, f.Clock, new FakeProcesses(1)).Acquire(), StateLockHeldError)
-        const other = new FakeProcesses(7)
-        other.Alive.add(1)
-        await assert.rejects(new StateLock(state.Files, f.Clock, other).Acquire(), StateLockHeldError)
-    })
-
-    it('takes over a stale lock: an old heartbeat, or a dead holder in the same process table', async () =>
-    {
-        const state = fresh()
-        const f = new LockFixture()
-        await new StateLock(state.Files, f.Clock, new FakeProcesses(40)).Acquire()
-        // The holder (pid 40) died: a process in the same table sees it gone and takes the lock at once.
-        await new StateLock(state.Files, f.Clock, new FakeProcesses(41)).Acquire()
-        const holder = new StateLock(state.Files, f.Clock, new FakeProcesses(1))
-        f.Now = new Date(f.Now.getTime() + StateLock.StaleMs + 1)
+        const holder = new StateLock(state.Files, f.Clock)
         await holder.Acquire()
-        // The holder keeps it fresh; an unreadable lock file is stale.
+        await assert.rejects(new StateLock(state.Files, f.Clock).Acquire(), StateLockHeldError)
+        f.Advance(StateLock.StaleMs - 1000)
         await holder.Refresh()
-        writeFileSync(state.Files.Path(StateLock.FileName), 'garbage')
-        await new StateLock(state.Files, f.Clock, new FakeProcesses(1)).Acquire()
+        f.Advance(StateLock.StaleMs - 1000)
+        await assert.rejects(new StateLock(state.Files, f.Clock).Acquire(), StateLockHeldError)
     })
 
-    it('a holder whose lock was taken over learns it on its next refresh', async () =>
+    it('a fresh lock naming a pid that is not alive here (another pid namespace) is never taken over', async () =>
     {
         const state = fresh()
         const f = new LockFixture()
-        const first = new StateLock(state.Files, f.Clock, new FakeProcesses(1))
+        // A holder in another container: its pid means nothing in this one.
+        writeFileSync(state.Files.Path(StateLock.FileName), JSON.stringify({ instance: 'other-container', pid: 999_999_999, heartbeat: f.Now.toISOString() }))
+        await assert.rejects(new StateLock(state.Files, f.Clock).Acquire(), StateLockHeldError)
+    })
+
+    it('takes over a stale lock (old heartbeat, or unreadable), and the old holder learns it on its next refresh', async () =>
+    {
+        const state = fresh()
+        const f = new LockFixture()
+        const first = new StateLock(state.Files, f.Clock)
         await first.Acquire()
-        f.Now = new Date(f.Now.getTime() + StateLock.StaleMs + 1)
-        await new StateLock(state.Files, f.Clock, new FakeProcesses(1)).Acquire()
+        f.Advance(StateLock.StaleMs + 1)
+        const second = new StateLock(state.Files, f.Clock)
+        await second.Acquire()
         await assert.rejects(first.Refresh(), StateLockHeldError)
+        writeFileSync(state.Files.Path(StateLock.FileName), 'garbage')
+        await new StateLock(state.Files, f.Clock).Acquire()
     })
 })

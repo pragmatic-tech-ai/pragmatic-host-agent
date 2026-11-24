@@ -76,9 +76,11 @@ export interface ISpawner
 /** ISpawner over `child_process.spawn` with `shell: false`. */
 export class NodeSpawner implements ISpawner
 {
+    private static readonly Pipe = 'pipe'
+
     public Spawn(program: string, args: readonly string[]): ChildProcessWithoutNullStreams
     {
-        return spawn(program, [...args], { shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+        return spawn(program, [...args], { shell: false, stdio: [NodeSpawner.Pipe, NodeSpawner.Pipe, NodeSpawner.Pipe], windowsHide: true })
     }
 }
 

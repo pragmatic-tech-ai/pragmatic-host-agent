@@ -14,8 +14,9 @@ export interface IPlacementSink
  * Pulls the host's placement queue (`Pull{After: cursor, Max}` -> `PullBatch`): each item is verified on its own
  * (platform-signed, addressed to this host, fresh) and recorded, and the cursor moves past the batch only when every
  * item was taken. An item that is permanently invalid (its signature, addressing, freshness or shape) is logged and
- * skipped; a transient failure (verifying it threw something else) or a placement being worked on (Busy) leaves the
- * cursor where it was, so the whole batch is pulled again on the next pass (a request taken twice changes nothing).
+ * skipped. A transient failure (verifying it threw something else) stops the batch; a placement being worked on (Busy)
+ * does not: the other placements' items are still taken. Either leaves the cursor where it was, so the batch is pulled
+ * again on the next pass (a request taken twice changes nothing: versions only rise).
  * Pulls again while a batch comes back full (bounded).
  */
 export class PlacementPuller
@@ -68,7 +69,7 @@ export class PlacementPuller
                 {
                     this.logger.Info(P.ItemDeferred, { [P.PlacementKey]: request.PlacementId })
                     complete = false
-                    break
+                    continue
                 }
                 if (outcome === AcceptOutcome.Recorded)
                 {

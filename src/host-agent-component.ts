@@ -33,7 +33,7 @@ export class HostAgentComponent
 {
     public static readonly Name = 'pragmatic-host-agent'
     /** The descriptor version: this application's package version (the release test pins it to package.json). */
-    public static readonly Version = '0.1.2'
+    public static readonly Version = '0.1.3'
     public static readonly Env = new HostAgentEnv()
     public static readonly Defaults = new HostAgentDefaults()
 

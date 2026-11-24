@@ -9,7 +9,7 @@ import { EngineInstaller, EngineTarget } from '../engine/engine-installer.js'
 import type { IHostedKubeFactory } from '../kube/hosted-kube.js'
 import type { HostChannel } from '../channel/host-channel.js'
 import { PlacementRecord, PlacementStep, type PlacementRecordJson } from './placement-record.js'
-import type { PlacementStore } from './placement-store.js'
+import { PlacementRecordUnreadableError, type PlacementStore } from './placement-store.js'
 
 /** The hosted hive did not write its enrolment ConfigMap by its recorded deadline. */
 export class HostedEnrolmentTimeoutError extends Error
@@ -109,6 +109,8 @@ export class PlacementReconciler
     private static readonly RunFailed = 'placement run failed'
     private static readonly ResultFailed = 'placement result not delivered'
     private static readonly RotationFailed = 'credential rotation failed'
+    private static readonly UnreadableRequest = 'a request names an unreadable placement file'
+    private static readonly RemoveKey = 'remove'
     private static readonly PlacementKey = 'placementId'
     private static readonly StepKey = 'step'
     private static readonly ErrorKey = 'error'
@@ -283,8 +285,20 @@ export class PlacementReconciler
     {
         const P = PlacementReconciler
         const store = this.options.Store
-        const existing = await store.Get(request.PlacementId)
         const remove = request.Operation === PlacementOperation.Remove
+        let existing: PlacementRecord | undefined
+        try
+        {
+            existing = await store.Get(request.PlacementId)
+        }
+        catch (error)
+        {
+            if (!(error instanceof PlacementRecordUnreadableError))
+            {
+                throw error
+            }
+            return this.Unreadable(request)
+        }
         if (existing === undefined)
         {
             const tombstone = await store.TombstoneOf(request.PlacementId)
@@ -334,10 +348,50 @@ export class PlacementReconciler
         return AcceptOutcome.Recorded
     }
 
+    /**
+     * A request for a placement whose file does not read (M20): a Remove deletes its cluster and charts (best effort) and
+     * answers removed, replacing the file; a Place is ignored (the capacity report shows the placement failed, what it
+     * holds is unknown). Either way the request is taken, so the pull cursor moves past it.
+     */
+    private async Unreadable(request: PlacementRequest): Promise<AcceptOutcome>
+    {
+        const P = PlacementReconciler
+        const remove = request.Operation === PlacementOperation.Remove
+        this.logger.Error(P.UnreadableRequest, { [P.PlacementKey]: request.PlacementId, [P.RemoveKey]: remove })
+        if (!remove)
+        {
+            return AcceptOutcome.Ignored
+        }
+        const name = ClusterNames.For(request.PlacementId)
+        try
+        {
+            await this.options.Driver.Delete(name)
+            await this.options.Engine.Forget(name)
+        }
+        catch (error)
+        {
+            this.logger.Warn(P.StepFailed, { [P.PlacementKey]: request.PlacementId, [P.StepKey]: PlacementStep.Removing, [P.ErrorKey]: P.MessageOf(error) })
+        }
+        await this.options.Store.Put(P.Fresh(request).With({ Step: PlacementStep.Removed, PendingResult: PlacementResult.Removed(request.PlacementId, request.Version).ToJson() }))
+        return AcceptOutcome.Recorded
+    }
+
     private async Steps(placementId: string): Promise<PlacementRecord | undefined>
     {
         const store = this.options.Store
-        let record = await store.Get(placementId)
+        let record: PlacementRecord | undefined
+        try
+        {
+            record = await store.Get(placementId)
+        }
+        catch (error)
+        {
+            if (error instanceof PlacementRecordUnreadableError)
+            {
+                return undefined
+            }
+            throw error
+        }
         while (record !== undefined && PlacementReconciler.Work.has(record.Step))
         {
             const step = record.Step
@@ -400,7 +454,9 @@ export class PlacementReconciler
         const held = await this.allocation.Run(async () =>
         {
             const all = await o.Store.All()
-            const others = all.filter(other => other.Id !== record.Id && other.Active).length
+            // A slot is held from the port on: a fresh request still waiting for its own allocation holds none, so N
+            // requests started together on N free slots all get one.
+            const others = all.filter(other => other.Id !== record.Id && other.Active && other.Json.Port !== null).length
             if (others >= o.HiveSlots)
             {
                 throw new NoCapacityError()

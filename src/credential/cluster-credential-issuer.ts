@@ -61,6 +61,7 @@ export class ClusterCredentialIssuer
     private static readonly NameSeparator = '-'
     private static readonly OpenBracket = '['
     private static readonly CloseBracket = ']'
+    private static readonly CaKey = 'certificate-authority-data'
 
     public constructor(private readonly clock: IProtocolClock)
     {
@@ -129,7 +130,7 @@ export class ClusterCredentialIssuer
         return JSON.stringify({
             apiVersion: C.ApiVersion,
             kind: C.ConfigKind,
-            clusters: [{ name: cluster, cluster: { server: C.HttpsPrefix + host + C.PortSeparator + String(port), 'certificate-authority-data': certificateAuthority } }],
+            clusters: [{ name: cluster, cluster: { server: C.HttpsPrefix + host + C.PortSeparator + String(port), [C.CaKey]: certificateAuthority } }],
             users: [{ name: C.ContextName, user: { token } }],
             contexts: [{ name: C.ContextName, context: { cluster, user: C.ContextName } }],
             'current-context': C.ContextName,

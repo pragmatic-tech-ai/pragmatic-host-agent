@@ -14,42 +14,12 @@ export class StateLockHeldError extends Error
     }
 }
 
-/** Whether a process id is alive on this machine (process.kill(pid, 0); faked in tests). */
-export interface IProcessTable
-{
-    readonly OwnPid: number
-    IsAlive(pid: number): boolean
-}
-
-export class NodeProcessTable implements IProcessTable
-{
-    private static readonly NoSuchProcess = 'ESRCH'
-
-    public get OwnPid(): number
-    {
-        return process.pid
-    }
-
-    public IsAlive(pid: number): boolean
-    {
-        try
-        {
-            process.kill(pid, 0)
-            return true
-        }
-        catch (error)
-        {
-            return (error as NodeJS.ErrnoException).code !== NodeProcessTable.NoSuchProcess
-        }
-    }
-}
-
 /**
  * One host agent per state directory: `<state dir>/agent.lock` names its holder (a random instance id, its pid, a
  * heartbeat). It is created exclusively (O_EXCL); a lock already there is taken over only when it is stale: its
- * heartbeat is older than `StaleMs`, or its pid is not alive and not this process's own (a container restarted with the
- * same pid 1 waits out the heartbeat instead, since in another container pid 1 is alive). The holder refreshes the
- * heartbeat every report pass (`Refresh`).
+ * heartbeat is older than `StaleMs` (or it does not read). The pid is recorded for an operator only, never trusted: across
+ * pid namespaces (containers) a pid says nothing about the holder. The holder refreshes the heartbeat every report pass
+ * (`Refresh`).
  */
 export class StateLock
 {
@@ -59,7 +29,7 @@ export class StateLock
     private static readonly Hex = 'hex'
     private readonly instance = randomBytes(StateLock.IdBytes).toString(StateLock.Hex)
 
-    public constructor(private readonly files: StateFiles, private readonly now: () => Date = () => new Date(), private readonly processes: IProcessTable = new NodeProcessTable())
+    public constructor(private readonly files: StateFiles, private readonly now: () => Date = () => new Date())
     {
     }
 
@@ -101,11 +71,7 @@ export class StateLock
         {
             return true
         }
-        if (this.now().getTime() - held.heartbeat > StateLock.StaleMs)
-        {
-            return true
-        }
-        return held.pid !== this.processes.OwnPid && !this.processes.IsAlive(held.pid)
+        return this.now().getTime() - held.heartbeat > StateLock.StaleMs
     }
 
     private Parse(text: string | undefined): { instance: string; pid: number; heartbeat: number } | undefined
@@ -132,6 +98,6 @@ export class StateLock
 
     private Text(): string
     {
-        return JSON.stringify({ instance: this.instance, pid: this.processes.OwnPid, heartbeat: this.now().toISOString() })
+        return JSON.stringify({ instance: this.instance, pid: process.pid, heartbeat: this.now().toISOString() })
     }
 }

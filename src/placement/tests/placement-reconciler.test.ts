@@ -7,6 +7,7 @@ import { ClusterCredentialIssuer } from '../../credential/cluster-credential-iss
 import { PlacementStep } from '../placement-record.js'
 import { AcceptOutcome, PlacementReconciler } from '../placement-reconciler.js'
 import { PlacementStore } from '../placement-store.js'
+import { EngineInstaller } from '../../engine/engine-installer.js'
 import { FakeHostedKube, KillingStore, KillPoint, PlacementFixture } from './placement-fixture.js'
 import { FakeProcessRunner } from '../../tests/fakes.js'
 
@@ -141,6 +142,40 @@ describe('PlacementReconciler', () =>
         assert.deepEqual(f.Driver.Creates.map(spec => spec.ApiServerPort).sort(), [16444, 16445])
     })
 
+    it('N+1 placements started together on N free slots: N are placed, one is refused no-capacity', async () =>
+    {
+        const f = await enrolled()
+        const reconciler = f.Reconciler({ Slots: 2 })
+        for (const id of ['p1', 'p2', 'p3'])
+        {
+            await reconciler.Accept(PlacementFixture.Place(id))
+        }
+        await reconciler.RunAll()
+        const steps = await Promise.all(['p1', 'p2', 'p3'].map(async id => (await f.Store().Get(id))?.Step))
+        assert.deepEqual(steps.filter(step => step === PlacementStep.Placed).length, 2, steps.join(','))
+        assert.deepEqual(steps.filter(step => step === PlacementStep.Failed).length, 1, steps.join(','))
+        assert.equal(f.Driver.Creates.length, 2)
+    })
+
+    it('a request naming an unreadable placement file never throws: a Remove answers removed, a Place is ignored', async () =>
+    {
+        const f = await enrolled()
+        await f.State.Files.EnsureDir('placements')
+        writeFileSync(f.State.Files.Path('placements', 'p9.json'), '{ not json')
+        writeFileSync(f.State.Files.Path('placements', 'p8.json'), '{ not json')
+        const reconciler = f.Reconciler()
+        assert.equal(await reconciler.Accept(PlacementFixture.Place('p8')), AcceptOutcome.Ignored)
+        assert.equal(await reconciler.Accept(PlacementFixture.Remove('p9', 3)), AcceptOutcome.Recorded)
+        assert.deepEqual(f.Driver.Deletes, ['pragmatic-hosted-p9'])
+        const record = await f.Store().Get('p9')
+        assert.equal(record?.Step, PlacementStep.Removed)
+        assert.equal(record?.Json.PendingResult?.Version, 3)
+        await reconciler.RunAll()
+        await reconciler.SendResults()
+        assert.deepEqual(ReconcilerFixture.Results(f), [{ Outcome: PlacementOutcome.Removed, Version: 3, Failure: null }])
+        assert.equal(await reconciler.Run('p8'), undefined)
+    })
+
     it('a host at its slot limit refuses the placement no-capacity and creates nothing', async () =>
     {
         const f = await enrolled()
@@ -168,7 +203,10 @@ describe('PlacementReconciler', () =>
         }
         assert.deepEqual(f.HelmRuns('pull')[0], ['helm', 'pull', 'oci://ghcr.io/pragmatic-tech-ai/charts/pragmatic-engine', '--version', PlacementFixture.Version, '--destination', f.State.Files.Path('charts', 'pragmatic-hosted-p1')])
         assert.deepEqual(f.HelmRuns('upgrade')[0], ReconcilerFixture.HelmUpgrade(f, PlacementFixture.Version, false))
-        assert.equal(f.Helm.Commands.find(command => command.Args[0] === 'upgrade')?.TimeoutMs, 20 * 60 * 1000, 'the helm process outlives its own 15m wait')
+        assert.equal(f.Helm.Commands.find(command => command.Args[0] === 'upgrade')?.TimeoutMs, 35 * 60 * 1000, 'the helm process outlives its 15m wait and an --atomic rollback\'s second one')
+        assert.equal(EngineInstaller.HelmWait, '15m')
+        assert.equal(EngineInstaller.HelmWaitMs, 15 * 60 * 1000)
+        assert.ok(EngineInstaller.HelmProcessTimeoutMs > 2 * EngineInstaller.HelmWaitMs)
     })
 
     it('refuses a chart whose pulled digest differs, installing nothing', async () =>

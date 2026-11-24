@@ -25,13 +25,14 @@ export interface IPortProbe
 export class LoopbackPortProbe implements IPortProbe
 {
     private static readonly Loopback = '127.0.0.1'
+    private static readonly ErrorEvent = 'error'
 
     public IsFree(port: number): Promise<boolean>
     {
         return new Promise(resolve =>
         {
             const server = createServer()
-            server.once('error', () => resolve(false))
+            server.once(LoopbackPortProbe.ErrorEvent, () => resolve(false))
             server.listen(port, LoopbackPortProbe.Loopback, () => server.close(() => resolve(true)))
         })
     }

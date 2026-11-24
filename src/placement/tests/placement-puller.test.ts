@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { writeFileSync } from 'node:fs'
 import { after, describe, it } from 'node:test'
 import { EnvelopeSigner, MessageKind, Participant, SigningKeyPair, type PlacementRequest, type SignedEnvelope, type VerifiedMessage } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
 import { HostChannel } from '../../channel/host-channel.js'
@@ -91,6 +92,32 @@ describe('PlacementPuller', () =>
         assert.equal(await new PlacementPuller(flaky, f.Store(), sink).Pull(), 1)
         assert.deepEqual(sink.Accepted.map(request => request.PlacementId), ['p1'])
         assert.equal(await f.Store().Cursor(), 1)
+    })
+
+    it('a busy placement does not hold up the other placements\' items, only the cursor', async () =>
+    {
+        const f = await enrolled()
+        f.Platform.Place(f.Enrolment.HostId, PlacementFixture.Place('p1'))
+        f.Platform.Place(f.Enrolment.HostId, PlacementFixture.Remove('p2', 2))
+        const sink = new RecordingSink()
+        sink.Busy.add('p1')
+        assert.equal(await new PlacementPuller(f.Channel, f.Store(), sink).Pull(), 1)
+        assert.deepEqual(sink.Accepted.map(request => request.PlacementId), ['p2'])
+        assert.equal(await f.Store().Cursor(), 0)
+    })
+
+    it('a request naming an unreadable placement file is taken and the cursor moves past it', async () =>
+    {
+        const f = await enrolled()
+        await f.State.Files.EnsureDir('placements')
+        writeFileSync(f.State.Files.Path('placements', 'p1.json'), '{ not json')
+        f.Platform.Place(f.Enrolment.HostId, PlacementFixture.Remove('p1', 2))
+        f.Platform.Place(f.Enrolment.HostId, PlacementFixture.Place('p2'))
+        const store = f.Store()
+        await new PlacementPuller(f.Channel, store, f.Reconciler({ Store: store })).Pull()
+        assert.equal(await store.Cursor(), 2)
+        assert.equal((await store.Get('p1'))?.Step, PlacementStep.Removed)
+        assert.equal((await store.Get('p2'))?.Step, PlacementStep.Cluster)
     })
 
     it('a request for a placement being worked on leaves the cursor before it', async () =>
