@@ -48,7 +48,7 @@ describe('CapacityReporter', () =>
     const states: TempState[] = []
     after(() => states.forEach(state => state.Dispose()))
 
-    it('capacity reports total and allocatable CPU, memory, storage and free hive slots', async () =>
+    it('capacity reports total and allocatable CPU, memory, storage and the total hive slots', async () =>
     {
         const probe = new FixedProbe(new MachineSample(true, 8000, 16000, 9000, 500, 300))
         const placements = new FixedPlacements([
@@ -60,7 +60,7 @@ describe('CapacityReporter', () =>
         const report = await new CapacityReporter(probe, placements, 4, '0.1.0').Report()
         assert.deepEqual(report.Capacity.ToJson(), { CpuMillicores: 8000, MemoryMiB: 16000, StorageGiB: 500 })
         assert.deepEqual(report.Allocatable.ToJson(), { CpuMillicores: 4000, MemoryMiB: 9000, StorageGiB: 300 })
-        assert.equal(report.HiveSlots, 2)
+        assert.equal(report.HiveSlots, 4, 'the total, not the free ones (the platform derives those)')
         assert.equal(report.Health, HostHealth.Healthy)
         assert.deepEqual(report.Placements.map(entry => entry.ToJson()), [
             { PlacementId: 'p1', State: PlacementState.Running },
@@ -71,11 +71,11 @@ describe('CapacityReporter', () =>
         assert.deepEqual(HostReport.Parse(report.ToJson()).ToJson(), report.ToJson())
     })
 
-    it('a full machine reports no free slot and no allocatable CPU; Docker down or a full disk is unavailable', async () =>
+    it('a full machine reports its total slots and no allocatable CPU; Docker down or a full disk is unavailable', async () =>
     {
         const full = new FixedPlacements([ReportFixture.Record('a', PlacementStep.Placed), ReportFixture.Record('b', PlacementStep.Cluster)])
         const report = await new CapacityReporter(new FixedProbe(new MachineSample(true, 4000, 8000, 4000, 100, 50)), full, 2, '0.1.0').Report()
-        assert.equal(report.HiveSlots, 0)
+        assert.equal(report.HiveSlots, 2)
         assert.equal(report.Allocatable.CpuMillicores, 0)
         const down = await new CapacityReporter(new FixedProbe(new MachineSample(false, 0, 0, 0, 100, 50)), new FixedPlacements([]), 2, '0.1.0').Report()
         assert.equal(down.Health, HostHealth.Unavailable)

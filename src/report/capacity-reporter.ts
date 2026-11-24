@@ -10,9 +10,10 @@ export interface IPlacementSource
 
 /**
  * The machine's capacity report (`HostReport`, every 30 s): the total (Capacity) and still-allocatable resources, the
- * free hive slots and every placement's state. Capacity is what Docker has and the state directory's file system;
+ * total hive slots and every placement's state. Capacity is what Docker has and the state directory's file system;
  * allocatable CPU is the share of the free slots, allocatable memory MemAvailable, allocatable storage the free space.
- * `HiveSlots` is the slots still free (configured slots minus the placements holding one). Healthy unless Docker does not
+ * `HiveSlots` is the machine's configured total (the protocol's "how many hives the machine can hold"); the platform derives
+ * the free ones from the placements it scheduled and the ones reported. Healthy unless Docker does not
  * answer or the disk is below the floor (then Unavailable: no new placements).
  */
 export class CapacityReporter
@@ -52,7 +53,7 @@ export class CapacityReporter
             Health: healthy ? HostHealth.Healthy : HostHealth.Unavailable,
             Capacity: capacity,
             Allocatable: allocatable,
-            HiveSlots: free,
+            HiveSlots: this.hiveSlots,
             Placements: statuses.slice(0, HostReport.MaxPlacements),
         })
     }
