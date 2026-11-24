@@ -1,12 +1,21 @@
 import { readFile } from 'node:fs/promises'
-import { HttpAgentChannel, SigningPublicKey, SystemProtocolClock } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { HttpAgentChannel, SigningPublicKey, SystemProtocolClock, type IProtocolClock } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
 import { StructuredLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { HostChannel } from './channel/host-channel.js'
+import { KindClusterDriver } from './cluster/kind-cluster-driver.js'
+import { PortAllocator } from './cluster/port-allocator.js'
+import { ClusterCredentialIssuer } from './credential/cluster-credential-issuer.js'
 import { FileEnrolmentCodeSource, HostEnrolment, HostEnrolmentFailure, HostEnrolmentRefusedError } from './enrolment/host-enrolment.js'
 import { HostEnrolmentStore, type HostEnrolmentState } from './enrolment/host-enrolment-state.js'
+import { EngineInstaller } from './engine/engine-installer.js'
 import { HostAgentComponent } from './host-agent-component.js'
 import { HostAgentLoop } from './host-agent-loop.js'
 import { HostIdentity } from './identity/host-identity.js'
+import { KubectlHostedKubeFactory } from './kube/hosted-kube.js'
+import { PlacementPuller } from './placement/placement-puller.js'
+import { PlacementReconciler, TimerDelay, type IDelay } from './placement/placement-reconciler.js'
 import { PlacementStore } from './placement/placement-store.js'
 import { NodeProcessRunner } from './process/process-runner.js'
 import { CapacityReporter } from './report/capacity-reporter.js'
@@ -27,23 +36,10 @@ export class TrustRootUnreadableError extends Error
     }
 }
 
-/** Waits between two enrolment attempts. */
-export interface IDelay
-{
-    Wait(ms: number): Promise<void>
-}
-
-export class TimerDelay implements IDelay
-{
-    public Wait(ms: number): Promise<void>
-    {
-        return new Promise(resolve => setTimeout(resolve, ms))
-    }
-}
-
 /**
  * The host agent (pragmatic-host-agentd): reads its settings, loads or creates the host key, enrols the machine once
- * (retrying while the platform is unreachable; a refused code stops the agent), then runs the capacity report loop.
+ * (retrying while the platform is unreachable; a refused code stops the agent), then runs the report and placement
+ * loops (HostAgentLoop) with the kind driver, helm and kubectl from its image.
  */
 export class HostAgentMain
 {
@@ -58,6 +54,7 @@ export class HostAgentMain
     private static readonly EnrolRetryEvent = 'enrol-retry'
     private static readonly StartedLine = 'pragmatic-host-agentd started'
     private static readonly StartedEvent = 'startup'
+    private static readonly VendorDir = 'vendor'
 
     private constructor()
     {
@@ -79,7 +76,7 @@ export class HostAgentMain
         })
         const state = await M.Enrol(enrolment, new FileEnrolmentCodeSource(settings.EnrolmentCodeFile), logger, new TimerDelay())
         const channel = new HostChannel(key, state, new HttpAgentChannel(state.ChannelUrl), clock)
-        const loop = M.Wire(settings, channel, logger)
+        const loop = M.Wire(settings, files, state, channel, clock, logger)
         logger.Info(M.StartedLine, { [M.EventKey]: M.StartedEvent, [M.HostKey]: state.HostId })
         loop.Start()
         return loop
@@ -113,11 +110,32 @@ export class HostAgentMain
         process.exit(1)
     }
 
-    private static Wire(settings: HostSettings, channel: HostChannel, logger: ILogger): HostAgentLoop
+    /** The vendored ingress-nginx manifest beside the compiled code (`<app>/vendor/...`, `<app>/dist/host-agent-main.js`). */
+    public static IngressManifestPath(): string
     {
-        const store = new PlacementStore(new StateFiles(settings.StateDir))
-        const reporter = new CapacityReporter(new DockerMachineProbe(new NodeProcessRunner(), settings.StateDir), store, settings.HiveSlots, HostAgentComponent.Version)
-        return new HostAgentLoop(channel, reporter, logger)
+        return join(dirname(fileURLToPath(import.meta.url)), '..', ...KindClusterDriver.IngressManifest.split('/'))
+    }
+
+    private static Wire(settings: HostSettings, files: StateFiles, state: HostEnrolmentState, channel: HostChannel, clock: IProtocolClock, logger: ILogger): HostAgentLoop
+    {
+        const runner = new NodeProcessRunner()
+        const store = new PlacementStore(files)
+        const reconciler = new PlacementReconciler({
+            Store: store,
+            Driver: new KindClusterDriver(runner, files, HostAgentMain.IngressManifestPath()),
+            Ports: new PortAllocator(settings.Ports),
+            Engine: new EngineInstaller(runner, files),
+            Kube: new KubectlHostedKubeFactory(runner),
+            Credentials: new ClusterCredentialIssuer(clock),
+            Channel: channel,
+            SealingKey: state.SealingKey,
+            MeshAddress: settings.MeshAddress,
+            HiveSlots: settings.HiveSlots,
+            Clock: clock,
+            Logger: logger,
+        })
+        const reporter = new CapacityReporter(new DockerMachineProbe(runner, settings.StateDir), store, settings.HiveSlots, HostAgentComponent.Version)
+        return new HostAgentLoop(channel, reporter, new PlacementPuller(channel, store, reconciler, logger), reconciler, logger)
     }
 
     private static async TrustRoot(path: string): Promise<SigningPublicKey>
