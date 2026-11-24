@@ -11,17 +11,19 @@ import { FileEnrolmentCodeSource, HostEnrolment, HostEnrolmentFailure, HostEnrol
 import { HostEnrolmentStore, type HostEnrolmentState } from './enrolment/host-enrolment-state.js'
 import { EngineInstaller } from './engine/engine-installer.js'
 import { HostAgentComponent } from './host-agent-component.js'
-import { HostAgentLoop } from './host-agent-loop.js'
+import { HostAgentLoop, RepeatingTask } from './host-agent-loop.js'
 import { HostIdentity } from './identity/host-identity.js'
 import { KubectlHostedKubeFactory } from './kube/hosted-kube.js'
 import { PlacementPuller } from './placement/placement-puller.js'
-import { PlacementReconciler, TimerDelay, type IDelay } from './placement/placement-reconciler.js'
+import { PlacementReconciler } from './placement/placement-reconciler.js'
+import { TimerDelay, type IDelay } from './process/delay.js'
 import { PlacementStore } from './placement/placement-store.js'
 import { NodeProcessRunner } from './process/process-runner.js'
 import { CapacityReporter } from './report/capacity-reporter.js'
 import { DockerMachineProbe } from './report/machine-probe.js'
 import { HostSettings } from './settings/host-settings.js'
 import { StateFiles } from './state/state-files.js'
+import { StateLock, StateLockHeldError } from './state/state-lock.js'
 
 /** The trust root file does not hold an Ed25519 public key (SPKI PEM). */
 export class TrustRootUnreadableError extends Error
@@ -39,7 +41,9 @@ export class TrustRootUnreadableError extends Error
 /**
  * The host agent (pragmatic-host-agentd): reads its settings, loads or creates the host key, enrols the machine once
  * (retrying while the platform is unreachable; a refused code stops the agent), then runs the report and placement
- * loops (HostAgentLoop) with the kind driver, helm and kubectl from its image.
+ * loops (HostAgentLoop) with the kind driver, helm and kubectl from its image. It holds the state directory's lock
+ * (StateLock) from before the key is read until it exits: a second agent on the same directory refuses to start, and
+ * one whose lock was taken over stops.
  */
 export class HostAgentMain
 {
@@ -54,7 +58,10 @@ export class HostAgentMain
     private static readonly EnrolRetryEvent = 'enrol-retry'
     private static readonly StartedLine = 'pragmatic-host-agentd started'
     private static readonly StartedEvent = 'startup'
-    private static readonly VendorDir = 'vendor'
+    private static readonly LockLostLine = 'the state directory lock was taken over: stopping'
+    private static readonly LockLostEvent = 'lock-lost'
+    private static readonly PathSeparator = '/'
+    private static readonly Parent = '..'
 
     private constructor()
     {
@@ -68,6 +75,8 @@ export class HostAgentMain
         const clock = new SystemProtocolClock()
         const files = new StateFiles(settings.StateDir)
         await files.EnsureDir()
+        const lock = new StateLock(files)
+        await lock.Acquire()
         const trustRoot = await M.TrustRoot(settings.TrustRootFile)
         const key = await HostIdentity.LoadOrCreate(files)
         const enrolment = new HostEnrolment({
@@ -79,6 +88,7 @@ export class HostAgentMain
         const loop = M.Wire(settings, files, state, channel, clock, logger)
         logger.Info(M.StartedLine, { [M.EventKey]: M.StartedEvent, [M.HostKey]: state.HostId })
         loop.Start()
+        new RepeatingTask(HostAgentLoop.IntervalMs, () => M.Heartbeat(lock, loop, logger)).Start()
         return loop
     }
 
@@ -104,6 +114,25 @@ export class HostAgentMain
         }
     }
 
+    /** Refreshes the lock; a lock taken over by another agent stops this one. */
+    public static async Heartbeat(lock: StateLock, loop: HostAgentLoop, logger: ILogger): Promise<void>
+    {
+        const M = HostAgentMain
+        try
+        {
+            await lock.Refresh()
+        }
+        catch (error)
+        {
+            if (error instanceof StateLockHeldError)
+            {
+                logger.Error(M.LockLostLine, { [M.EventKey]: M.LockLostEvent })
+                loop.Stop()
+                process.exit(1)
+            }
+        }
+    }
+
     public static Fail(error: unknown): void
     {
         StructuredLogger.ToStdout().Error(HostAgentMain.StartFailedPrefix + (error instanceof Error ? error.message : HostAgentMain.UnknownError), { [HostAgentMain.EventKey]: HostAgentMain.StartFailedEvent })
@@ -113,13 +142,13 @@ export class HostAgentMain
     /** The vendored ingress-nginx manifest beside the compiled code (`<app>/vendor/...`, `<app>/dist/host-agent-main.js`). */
     public static IngressManifestPath(): string
     {
-        return join(dirname(fileURLToPath(import.meta.url)), '..', ...KindClusterDriver.IngressManifest.split('/'))
+        return join(dirname(fileURLToPath(import.meta.url)), HostAgentMain.Parent, ...KindClusterDriver.IngressManifest.split(HostAgentMain.PathSeparator))
     }
 
     private static Wire(settings: HostSettings, files: StateFiles, state: HostEnrolmentState, channel: HostChannel, clock: IProtocolClock, logger: ILogger): HostAgentLoop
     {
         const runner = new NodeProcessRunner()
-        const store = new PlacementStore(files)
+        const store = new PlacementStore(files, logger)
         const reconciler = new PlacementReconciler({
             Store: store,
             Driver: new KindClusterDriver(runner, files, HostAgentMain.IngressManifestPath()),

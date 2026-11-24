@@ -60,9 +60,13 @@ export class HostChannel
         return (await this.verifier.Verify(reply, MessageKind.PullBatch, PullBatch)).Body
     }
 
-    /** A pulled placement request, verified: platform-signed, addressed to this host, fresh, never seen before. */
+    /**
+     * A pulled placement request, verified: platform-signed, addressed to this host, fresh, decoding strictly. Its nonce
+     * is not claimed: a batch whose cursor was not stored is pulled and verified again, and a replayed request changes
+     * nothing (placement versions only rise).
+     */
     public VerifyPlacement(item: SignedEnvelope): Promise<VerifiedMessage<PlacementRequest>>
     {
-        return this.verifier.Verify(item, MessageKind.PlacementRequest, PlacementRequest)
+        return this.verifier.Recheck(item, MessageKind.PlacementRequest, PlacementRequest)
     }
 }

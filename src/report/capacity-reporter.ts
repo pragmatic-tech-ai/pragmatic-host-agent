@@ -1,4 +1,4 @@
-import { HostHealth, HostReport, PlacementStatus, Resources } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
+import { HostHealth, HostReport, PlacementState, PlacementStatus, Resources } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
 import type { PlacementRecord } from '../placement/placement-record.js'
 import type { IMachineProbe } from './machine-probe.js'
 
@@ -6,6 +6,8 @@ import type { IMachineProbe } from './machine-probe.js'
 export interface IPlacementSource
 {
     All(): Promise<PlacementRecord[]>
+    /** Placements whose files did not read: reported failed (what they hold is unknown). */
+    readonly Unreadable: readonly string[]
 }
 
 /**
@@ -40,12 +42,20 @@ export class CapacityReporter
         const allocatable = new Resources(cpu, Math.min(sample.MemoryAvailableMiB, sample.MemoryTotalMiB), Math.min(sample.StorageFreeGiB, sample.StorageTotalGiB))
         const healthy = sample.DockerUp && sample.StorageFreeGiB >= CapacityReporter.MinFreeStorageGiB
         const statuses: PlacementStatus[] = []
+        // Only the placements holding a slot (a removed or failed one is not), then the unreadable ones as failed.
         for (const record of records)
         {
             const state = record.State
             if (state !== undefined)
             {
                 statuses.push(new PlacementStatus(record.Id, state))
+            }
+        }
+        for (const id of this.placements.Unreadable)
+        {
+            if (!records.some(record => record.Id === id))
+            {
+                statuses.push(new PlacementStatus(id, PlacementState.Failed))
             }
         }
         return HostReport.Create({

@@ -1,6 +1,6 @@
 {
   "name": "@pragmatic-tech-ai/pragmatic-host-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "The host agent (pragmatic-host-agentd): enrols one of our hosting machines once, reports its capacity, and places, upgrades and removes Hosted hives on it (kind clusters, the engine chart, a sealed rotating cluster credential).",
   "license": "Apache-2.0",
@@ -18,12 +18,12 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json"
   },
   "dependencies": {
-    "@pragmatic-tech-ai/pragmatic-component": "^0.21.3",
-    "@pragmatic-tech-ai/pragmatic-hive-protocol": "^0.21.3",
-    "@pragmatic-tech-ai/pragmatic-observability": "^0.21.3"
+    "@pragmatic-tech-ai/pragmatic-component": "^0.22.1",
+    "@pragmatic-tech-ai/pragmatic-hive-protocol": "^0.22.1",
+    "@pragmatic-tech-ai/pragmatic-observability": "^0.22.1"
   },
   "devDependencies": {
-    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.21.3",
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.22.1",
     "@types/node": "^22.20.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0"

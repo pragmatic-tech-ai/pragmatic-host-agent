@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, describe, it } from 'node:test'
-import { HostReport, MessageKind, PlacementOutcome, PlacementRequest, PlacementState, type PlacementResult } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
+import { HostReport, MessageKind, PlacementOutcome, PlacementState, type PlacementResult } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
 import { StructuredLogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { HostAgentLoop } from '../host-agent-loop.js'
 import { PlacementPuller } from '../placement/placement-puller.js'
@@ -33,12 +33,16 @@ describe('HostAgentLoop', () =>
         await loop.ReportOnce()
         f.Platform.Place(f.Enrolment.HostId, PlacementFixture.Place('p1'))
         await loop.WorkOnce()
+        await reconciler.Idle()
+        await loop.WorkOnce()
         await loop.ReportOnce()
         const reports = f.Platform.ReceivedOf<HostReport>(MessageKind.HostReport)
-        assert.deepEqual(reports.map(report => report.HiveSlots), [4, 3])
+        assert.deepEqual(reports.map(report => report.HiveSlots), [4, 4])
         assert.deepEqual(reports[1].Placements.map(entry => entry.ToJson()), [{ PlacementId: 'p1', State: PlacementState.Running }])
         assert.equal(f.Platform.Credentials.has('clusters/p1'), true)
-        f.Platform.Place(f.Enrolment.HostId, PlacementRequest.Remove('p1', PlacementFixture.Tenant))
+        f.Platform.Place(f.Enrolment.HostId, PlacementFixture.Remove('p1'))
+        await loop.WorkOnce()
+        await reconciler.Idle()
         await loop.WorkOnce()
         assert.deepEqual(f.Platform.ReceivedOf<PlacementResult>(MessageKind.PlacementResult).map(result => result.Outcome), [PlacementOutcome.Placed, PlacementOutcome.Removed])
         assert.equal(f.Driver.Clusters.size, 0)

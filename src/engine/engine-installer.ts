@@ -32,10 +32,13 @@ export class ChartDigestMismatchError extends Error
  * Installs and upgrades the management engine in a hosted cluster with helm 3. The chart is pulled from
  * `oci://ghcr.io/pragmatic-tech-ai/charts/pragmatic-engine` at the placement's version into
  * `<state dir>/charts/<cluster>/` and refused unless helm reports the placement's ChartDigest; the local archive is what
- * is installed. A first install writes the hive's one-time code into Secret `pragmatic-system/pragmatic-hive-enrolment-code`
- * (key `code`, through `kubectl apply` on standard input) before `helm upgrade --install`: the code never appears on an
- * argument vector or in the chart values. Values: hosted=true, level=connected, tenant.id, console.host (the placement's
- * HiveHostName), console.address=relayed-hive-subdomain, tls.mode=self-signed. An upgrade is helm only.
+ * is installed. The hive's one-time code goes into Secret `pragmatic-system/pragmatic-hive-enrolment-code` (key `code`,
+ * `kubectl apply` on standard input, `WriteCode`) before the first `helm upgrade --install`: the code never appears on an
+ * argument vector or in the chart values. Values: hosted=true, level=connected, tenant.id, console.host and
+ * console.baseDomain (both the placement's HiveHostName: the sign-in service and the environments live under the hive's
+ * own SNI label, nothing shared across hosted hives), console.address=relayed-hive-subdomain, tls.mode=self-signed. An
+ * upgrade is helm only, `--atomic` (a failed one rolls back to the running release). Helm waits at most 15 minutes and
+ * its process is killed at 20.
  */
 export class EngineInstaller
 {
@@ -45,21 +48,41 @@ export class EngineInstaller
     public static readonly CodeSecret = 'pragmatic-hive-enrolment-code'
     public static readonly CodeKey = 'code'
     public static readonly ChartsDir = 'charts'
+    public static readonly HelmWait = '15m'
+    public static readonly HelmProcessTimeoutMs = 20 * 60 * 1000
+    public static readonly PullTimeoutMs = 5 * 60 * 1000
     private static readonly Helm = 'helm'
+    private static readonly Pull = 'pull'
+    private static readonly Upgrade = 'upgrade'
+    private static readonly InstallFlag = '--install'
+    private static readonly AtomicFlag = '--atomic'
+    private static readonly VersionFlag = '--version'
+    private static readonly DestinationFlag = '--destination'
+    private static readonly NamespaceFlag = '--namespace'
+    private static readonly CreateNamespaceFlag = '--create-namespace'
+    private static readonly KubeconfigFlag = '--kubeconfig'
+    private static readonly WaitFlag = '--wait'
+    private static readonly TimeoutFlag = '--timeout'
+    private static readonly SetFlag = '--set'
+    private static readonly SetStringFlag = '--set-string'
     private static readonly ChartPrefix = 'pragmatic-engine-'
     private static readonly ChartSuffix = '.tgz'
     private static readonly DigestLine = /^Digest:\s*(sha256:[0-9a-f]{64})\s*$/m
-    private static readonly Timeout = '15m'
     private static readonly Base64 = 'base64'
-    private static readonly SetFlag = '--set'
-    private static readonly SetStringFlag = '--set-string'
     private static readonly Assign = '='
+    private static readonly Newline = '\n'
     private static readonly Hosted = 'hosted=true'
     private static readonly Level = 'level=connected'
     private static readonly TenantId = 'tenant.id'
     private static readonly ConsoleHost = 'console.host'
+    private static readonly ConsoleBaseDomain = 'console.baseDomain'
     private static readonly ConsoleAddress = 'console.address=relayed-hive-subdomain'
     private static readonly TlsMode = 'tls.mode=self-signed'
+    private static readonly ApiVersion = 'v1'
+    private static readonly ListKind = 'List'
+    private static readonly NamespaceKind = 'Namespace'
+    private static readonly SecretKind = 'Secret'
+    private static readonly OpaqueType = 'Opaque'
     private readonly run: CheckedRunner
 
     public constructor(runner: IProcessRunner, private readonly files: StateFiles, private readonly chartReference: string = EngineInstaller.ChartReference)
@@ -67,58 +90,71 @@ export class EngineInstaller
         this.run = new CheckedRunner(runner)
     }
 
-    /** The first install: the code Secret, then the chart. */
-    public async Install(access: ClusterAccess, kube: IHostedKube, target: EngineTarget, enrolmentCode: string): Promise<void>
+    /** The hive's one-time code into its Secret (applied: writing it again changes nothing). */
+    public async WriteCode(kube: IHostedKube, enrolmentCode: string): Promise<void>
     {
         const E = EngineInstaller
         await kube.Apply({
-            apiVersion: 'v1',
-            kind: 'List',
+            apiVersion: E.ApiVersion,
+            kind: E.ListKind,
             items: [
-                { apiVersion: 'v1', kind: 'Namespace', metadata: { name: E.Namespace } },
+                { apiVersion: E.ApiVersion, kind: E.NamespaceKind, metadata: { name: E.Namespace } },
                 {
-                    apiVersion: 'v1', kind: 'Secret', type: 'Opaque',
+                    apiVersion: E.ApiVersion, kind: E.SecretKind, type: E.OpaqueType,
                     metadata: { name: E.CodeSecret, namespace: E.Namespace },
                     data: { [E.CodeKey]: Buffer.from(enrolmentCode).toString(E.Base64) },
                 },
             ],
         })
-        await this.Helm(access, target)
     }
 
-    /** A new engine version or chart digest for an installed hive: helm upgrade only. */
+    /** The first install (after WriteCode): helm upgrade --install. */
+    public Install(access: ClusterAccess, target: EngineTarget): Promise<void>
+    {
+        return this.Helm(access, target, false)
+    }
+
+    /** A new engine version or chart digest for an installed hive: helm upgrade --atomic only, never the code Secret. */
     public Upgrade(access: ClusterAccess, target: EngineTarget): Promise<void>
     {
-        return this.Helm(access, target)
+        return this.Helm(access, target, true)
     }
 
-    private async Helm(access: ClusterAccess, target: EngineTarget): Promise<void>
+    /** Drops the cluster's pulled charts (its removal). */
+    public async Forget(clusterName: string): Promise<void>
+    {
+        await this.files.Remove(this.files.Path(EngineInstaller.ChartsDir, clusterName))
+    }
+
+    private async Helm(access: ClusterAccess, target: EngineTarget, atomic: boolean): Promise<void>
     {
         const E = EngineInstaller
-        const chart = await this.Pull(access, target)
+        const chart = await this.PullChart(access, target)
         await this.run.Run(new ProcessCommand(E.Helm, [
-            'upgrade', '--install', E.ReleaseName, chart,
-            '--namespace', E.Namespace, '--create-namespace',
-            '--kubeconfig', access.KubeconfigPath,
+            E.Upgrade, E.InstallFlag, E.ReleaseName, chart,
+            E.NamespaceFlag, E.Namespace, E.CreateNamespaceFlag,
+            E.KubeconfigFlag, access.KubeconfigPath,
             E.SetFlag, E.Hosted,
             E.SetStringFlag, E.Level,
             E.SetStringFlag, E.TenantId + E.Assign + target.Tenant,
             E.SetStringFlag, E.ConsoleHost + E.Assign + target.HiveHostName,
+            E.SetStringFlag, E.ConsoleBaseDomain + E.Assign + target.HiveHostName,
             E.SetStringFlag, E.ConsoleAddress,
             E.SetStringFlag, E.TlsMode,
-            '--wait', '--timeout', E.Timeout,
-        ]))
+            ...(atomic ? [E.AtomicFlag] : []),
+            E.WaitFlag, E.TimeoutFlag, E.HelmWait,
+        ], undefined, E.HelmProcessTimeoutMs))
     }
 
     /** `helm pull` into a clean directory; the archive's path once helm reported the expected digest. */
-    private async Pull(access: ClusterAccess, target: EngineTarget): Promise<string>
+    private async PullChart(access: ClusterAccess, target: EngineTarget): Promise<string>
     {
         const E = EngineInstaller
         const dir = this.files.Path(E.ChartsDir, access.Name)
         await this.files.Remove(dir)
         await this.files.EnsureDir(E.ChartsDir, access.Name)
-        const result = await this.run.Run(new ProcessCommand(E.Helm, ['pull', this.chartReference, '--version', target.EngineVersion, '--destination', dir]))
-        const digest = E.DigestLine.exec(result.Stdout + '\n' + result.Stderr)?.[1]
+        const result = await this.run.Run(new ProcessCommand(E.Helm, [E.Pull, this.chartReference, E.VersionFlag, target.EngineVersion, E.DestinationFlag, dir], undefined, E.PullTimeoutMs))
+        const digest = E.DigestLine.exec(result.Stdout + E.Newline + result.Stderr)?.[1]
         if (digest !== target.ChartDigest)
         {
             await this.files.Remove(dir)

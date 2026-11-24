@@ -48,6 +48,19 @@ export class ClusterCredentialIssuer
     private static readonly HttpsPrefix = 'https://'
     private static readonly PortSeparator = ':'
     private static readonly ContextName = 'pragmatic-platform'
+    private static readonly ApiVersion = 'v1'
+    private static readonly RbacApiVersion = 'rbac.authorization.k8s.io/v1'
+    private static readonly RbacGroup = 'rbac.authorization.k8s.io'
+    private static readonly ListKind = 'List'
+    private static readonly NamespaceKind = 'Namespace'
+    private static readonly ServiceAccountKind = 'ServiceAccount'
+    private static readonly BindingKind = 'ClusterRoleBinding'
+    private static readonly ClusterRoleKind = 'ClusterRole'
+    private static readonly ConfigKind = 'Config'
+    private static readonly ReferenceSeparator = '/'
+    private static readonly NameSeparator = '-'
+    private static readonly OpenBracket = '['
+    private static readonly CloseBracket = ']'
 
     public constructor(private readonly clock: IProtocolClock)
     {
@@ -68,16 +81,16 @@ export class ClusterCredentialIssuer
     {
         const C = ClusterCredentialIssuer
         await kube.Apply({
-            apiVersion: 'v1',
-            kind: 'List',
+            apiVersion: C.ApiVersion,
+            kind: C.ListKind,
             items: [
-                { apiVersion: 'v1', kind: 'Namespace', metadata: { name: C.Namespace } },
-                { apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: C.ServiceAccount, namespace: C.Namespace } },
+                { apiVersion: C.ApiVersion, kind: C.NamespaceKind, metadata: { name: C.Namespace } },
+                { apiVersion: C.ApiVersion, kind: C.ServiceAccountKind, metadata: { name: C.ServiceAccount, namespace: C.Namespace } },
                 {
-                    apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRoleBinding',
+                    apiVersion: C.RbacApiVersion, kind: C.BindingKind,
                     metadata: { name: C.Binding },
-                    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: C.ClusterRole },
-                    subjects: [{ kind: 'ServiceAccount', name: C.ServiceAccount, namespace: C.Namespace }],
+                    roleRef: { apiGroup: C.RbacGroup, kind: C.ClusterRoleKind, name: C.ClusterRole },
+                    subjects: [{ kind: C.ServiceAccountKind, name: C.ServiceAccount, namespace: C.Namespace }],
                 },
             ],
         })
@@ -111,11 +124,11 @@ export class ClusterCredentialIssuer
     public static Kubeconfig(meshAddress: string, port: number, certificateAuthority: string, token: string, placementId: string): string
     {
         const C = ClusterCredentialIssuer
-        const cluster = ClusterCredentialHandover.ReferenceFor(placementId).replace('/', '-')
-        const host = meshAddress.includes(C.PortSeparator) ? '[' + meshAddress + ']' : meshAddress
+        const cluster = ClusterCredentialHandover.ReferenceFor(placementId).replace(C.ReferenceSeparator, C.NameSeparator)
+        const host = meshAddress.includes(C.PortSeparator) ? C.OpenBracket + meshAddress + C.CloseBracket : meshAddress
         return JSON.stringify({
-            apiVersion: 'v1',
-            kind: 'Config',
+            apiVersion: C.ApiVersion,
+            kind: C.ConfigKind,
             clusters: [{ name: cluster, cluster: { server: C.HttpsPrefix + host + C.PortSeparator + String(port), 'certificate-authority-data': certificateAuthority } }],
             users: [{ name: C.ContextName, user: { token } }],
             contexts: [{ name: C.ContextName, context: { cluster, user: C.ContextName } }],

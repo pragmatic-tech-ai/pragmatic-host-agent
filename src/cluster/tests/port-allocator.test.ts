@@ -18,8 +18,8 @@ class PortFixture
     public static Record(id: string, step: PlacementStep, port: number | null): PlacementRecord
     {
         const json: PlacementRecordJson = {
-            PlacementId: id, Tenant: 'acme', Step: step, EngineVersion: null, ChartDigest: null, HiveHostName: null, InstalledVersion: null, InstalledDigest: null,
-            EnrolmentCode: null, Port: port, Rotation: 0, CredentialIssuedAt: null, Attempts: 0, PendingResult: null,
+            PlacementId: id, Tenant: 'acme', Version: 1, Step: step, EngineVersion: null, ChartDigest: null, HiveHostName: null, InstalledVersion: null, InstalledDigest: null,
+            EnrolmentCode: null, Port: port, Rotation: 0, CredentialIssuedAt: null, EnrolmentDeadline: null, Attempts: 0, PendingResult: null,
         }
         return new PlacementRecord(json)
     }

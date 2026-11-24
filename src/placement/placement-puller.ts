@@ -1,25 +1,30 @@
-import { Pull, type PlacementRequest } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
+import { ProtocolDecodeError, ProtocolVerificationError, Pull, type PlacementRequest } from '@pragmatic-tech-ai/pragmatic-hive-protocol'
 import { NullLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import type { HostChannel } from '../channel/host-channel.js'
+import { AcceptOutcome } from './placement-reconciler.js'
 import type { PlacementStore } from './placement-store.js'
 
 /** Takes a verified placement request (PlacementReconciler.Accept). */
 export interface IPlacementSink
 {
-    Accept(request: PlacementRequest): Promise<void>
+    Accept(request: PlacementRequest): Promise<AcceptOutcome>
 }
 
 /**
  * Pulls the host's placement queue (`Pull{After: cursor, Max}` -> `PullBatch`): each item is verified on its own
- * (platform-signed, addressed to this host, fresh, never seen) and recorded before the cursor moves past it, so a
- * restart never loses a pulled placement; an item that does not verify is logged and skipped. Pulls again while a batch
- * comes back full (bounded).
+ * (platform-signed, addressed to this host, fresh) and recorded, and the cursor moves past the batch only when every
+ * item was taken. An item that is permanently invalid (its signature, addressing, freshness or shape) is logged and
+ * skipped; a transient failure (verifying it threw something else) or a placement being worked on (Busy) leaves the
+ * cursor where it was, so the whole batch is pulled again on the next pass (a request taken twice changes nothing).
+ * Pulls again while a batch comes back full (bounded).
  */
 export class PlacementPuller
 {
     public static readonly MaxBatches = 10
     private static readonly ItemRefused = 'placement item refused'
+    private static readonly ItemDeferred = 'placement item deferred to the next pull'
     private static readonly ErrorKey = 'error'
+    private static readonly PlacementKey = 'placementId'
     private static readonly Unknown = 'unknown error'
 
     public constructor(
@@ -34,11 +39,12 @@ export class PlacementPuller
     public async Pull(): Promise<number>
     {
         const P = PlacementPuller
-        let accepted = 0
+        let recorded = 0
         for (let batchIndex = 0; batchIndex < P.MaxBatches; batchIndex += 1)
         {
             const after = await this.store.Cursor()
             const batch = await this.channel.Pull(after, Pull.MaxItems)
+            let complete = true
             for (const item of batch.Items)
             {
                 let request: PlacementRequest
@@ -48,11 +54,30 @@ export class PlacementPuller
                 }
                 catch (error)
                 {
-                    this.logger.Warn(P.ItemRefused, { [P.ErrorKey]: error instanceof Error ? error.message : P.Unknown })
-                    continue
+                    if (error instanceof ProtocolVerificationError || error instanceof ProtocolDecodeError)
+                    {
+                        this.logger.Warn(P.ItemRefused, { [P.ErrorKey]: error.message })
+                        continue
+                    }
+                    this.logger.Warn(P.ItemDeferred, { [P.ErrorKey]: error instanceof Error ? error.message : P.Unknown })
+                    complete = false
+                    break
                 }
-                await this.sink.Accept(request)
-                accepted += 1
+                const outcome = await this.sink.Accept(request)
+                if (outcome === AcceptOutcome.Busy)
+                {
+                    this.logger.Info(P.ItemDeferred, { [P.PlacementKey]: request.PlacementId })
+                    complete = false
+                    break
+                }
+                if (outcome === AcceptOutcome.Recorded)
+                {
+                    recorded += 1
+                }
+            }
+            if (!complete)
+            {
+                break
             }
             if (batch.Cursor !== after)
             {
@@ -63,6 +88,6 @@ export class PlacementPuller
                 break
             }
         }
-        return accepted
+        return recorded
     }
 }

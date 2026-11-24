@@ -38,7 +38,9 @@ of them the agent stops with `the host agent is not configured: ...` naming each
 
 The state directory holds the host key (`host-key.pem`, PKCS#8, mode 0600, never replaced), the enrolment
 (`enrolment.json`: host id, channel, the platform's public signing and sealing keys), the placements
-(`placements/<id>.json`, each step recorded), the pull cursor and each cluster's kind config and admin kubeconfig. It
+(`placements/<id>.json`, each step recorded; a finished one is pruned once its result was acknowledged, its id and last
+version kept in `placement-tombstones.json`), the pull cursor, each cluster's kind config and admin kubeconfig, and
+`agent.lock` (one agent per state directory: a second one refuses to start). It
 never holds a platform secret; a hosted hive's one-time code stays in its placement record only until it is written into
 the cluster.
 

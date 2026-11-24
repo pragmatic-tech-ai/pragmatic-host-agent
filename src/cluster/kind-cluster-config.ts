@@ -23,6 +23,9 @@ export class KindClusterConfig
     /** The kubeadm API kind generates for the pinned node image (>= 1.36): extraArgs are name/value lists there. */
     public static readonly KubeadmVersion = 'v1beta4'
     private static readonly Newline = '\n'
+    private static readonly AddOp = 'add'
+    private static readonly CertSansPath = '/apiServer/certSANs/-'
+    private static readonly ExtraArgsPath = '/apiServer/extraArgs/-'
 
     public constructor(private readonly nodeImage: string = KindClusterConfig.NodeImage)
     {
@@ -41,10 +44,11 @@ export class KindClusterConfig
     /** The JSON 6902 operations on kind's generated ClusterConfiguration: append the SAN, then each extra flag. */
     public KubeadmPatch(spec: ClusterSpec): readonly Record<string, unknown>[]
     {
-        const operations: Record<string, unknown>[] = [{ op: 'add', path: '/apiServer/certSANs/-', value: spec.MeshAddress }]
+        const K = KindClusterConfig
+        const operations: Record<string, unknown>[] = [{ op: K.AddOp, path: K.CertSansPath, value: spec.MeshAddress }]
         for (const arg of this.ApiServerExtraArgs(spec))
         {
-            operations.push({ op: 'add', path: '/apiServer/extraArgs/-', value: { name: arg.Name, value: arg.Value } })
+            operations.push({ op: K.AddOp, path: K.ExtraArgsPath, value: { name: arg.Name, value: arg.Value } })
         }
         return operations
     }

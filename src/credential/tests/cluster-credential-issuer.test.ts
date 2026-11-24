@@ -11,13 +11,14 @@ describe('ClusterCredentialIssuer', () =>
     {
         const clock = new FakeClock()
         const sealing = SealingKeyPair.Generate()
-        const kube = new FakeHostedKube()
+        const fake = new FakeHostedKube()
+        const kube = fake.Direct()
         const host = Participant.Host('host-1')
         const handover = await new ClusterCredentialIssuer(clock).Issue(kube, new CredentialSubject(host, 'p1', '100.64.0.7', 16450, sealing.PublicKey), 1)
         assert.equal(handover.Rotation, 1)
         assert.equal(handover.CredentialReference, 'clusters/p1')
         assert.equal(handover.ExpiresAt.getTime() - clock.Now().getTime(), 7 * 24 * 3_600_000)
-        const items = (kube.Applied[0].Manifest as { items: { kind: string; metadata: { name: string; namespace?: string }; roleRef?: { name: string }; subjects?: unknown[] }[] }).items
+        const items = (fake.Applied[0].Manifest as { items: { kind: string; metadata: { name: string; namespace?: string }; roleRef?: { name: string }; subjects?: unknown[] }[] }).items
         assert.deepEqual(items.map(item => item.kind), ['Namespace', 'ServiceAccount', 'ClusterRoleBinding'])
         assert.deepEqual(items[1].metadata, { name: 'pragmatic-platform', namespace: 'pragmatic-system' })
         assert.equal(items[2].roleRef?.name, 'cluster-admin')

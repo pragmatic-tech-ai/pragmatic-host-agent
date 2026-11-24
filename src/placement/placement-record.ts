@@ -22,6 +22,8 @@ export interface PlacementRecordJson
 {
     PlacementId: string
     Tenant: string
+    /** The newest placement version applied (PlacementRequest.Version): an older request delivered late is ignored. */
+    Version: number
     Step: PlacementStep
     EngineVersion: string | null
     ChartDigest: string | null
@@ -36,6 +38,8 @@ export interface PlacementRecordJson
     /** The last credential handover's rotation number (0: none yet) and when it was issued. */
     Rotation: number
     CredentialIssuedAt: string | null
+    /** While in the enrolment step: when the hosted hive must have enrolled by (ISO), checked once per pass. */
+    EnrolmentDeadline: string | null
     /** Times the current step failed in a row (a step is retried a bounded number of times before the placement fails). */
     Attempts: number
     /** The result to send (retried until the platform acknowledges it), or null when none is pending. */
@@ -57,7 +61,6 @@ export class PlacementRecord
         [PlacementStep.Enrolment, PlacementState.Enrolling],
         [PlacementStep.Credential, PlacementState.Enrolling],
         [PlacementStep.Placed, PlacementState.Running],
-        [PlacementStep.Failed, PlacementState.Failed],
         [PlacementStep.Removing, PlacementState.Removing],
     ])
 
@@ -73,7 +76,8 @@ export class PlacementRecord
         }
         const json = value as PlacementRecordJson
         if (typeof json.PlacementId !== 'string' || !ProtocolNames.Label.test(json.PlacementId) || !PlacementRecord.Steps.includes(json.Step)
-            || typeof json.Tenant !== 'string' || typeof json.Rotation !== 'number' || typeof json.Attempts !== 'number')
+            || typeof json.Tenant !== 'string' || typeof json.Rotation !== 'number' || typeof json.Attempts !== 'number'
+            || typeof json.Version !== 'number' || !Number.isSafeInteger(json.Version) || json.Version < 1)
         {
             return undefined
         }
@@ -101,13 +105,19 @@ export class PlacementRecord
         return this.Json.Step
     }
 
+    /** Removed or failed, its result acknowledged: nothing left to do or say, so its file can go. */
+    public get Finished(): boolean
+    {
+        return (this.Json.Step === PlacementStep.Removed || this.Json.Step === PlacementStep.Failed) && this.Json.PendingResult === null
+    }
+
     /** Whether the placement holds one of the machine's hive slots. */
     public get Active(): boolean
     {
         return PlacementRecord.Active.has(this.Json.Step)
     }
 
-    /** The protocol state a capacity report shows for it; undefined once removed. */
+    /** The protocol state a capacity report shows for it: only a placement holding a slot; undefined once removed or failed. */
     public get State(): PlacementState | undefined
     {
         return PlacementRecord.States.get(this.Json.Step)

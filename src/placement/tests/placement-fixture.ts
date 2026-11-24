@@ -11,7 +11,7 @@ import type { IHostedKube, IHostedKubeFactory } from '../../kube/hosted-kube.js'
 import { PortRange } from '../../settings/host-settings.js'
 import { FakeProcessRunner, TempState } from '../../tests/fakes.js'
 import type { PlacementRecord } from '../placement-record.js'
-import { PlacementReconciler, type IDelay } from '../placement-reconciler.js'
+import { PlacementReconciler } from '../placement-reconciler.js'
 import { PlacementStore } from '../placement-store.js'
 
 /** IClusterDriver in memory: which clusters exist and how often each operation ran. */
@@ -56,44 +56,63 @@ export class FakeClusterDriver implements IClusterDriver
     }
 }
 
-/** IHostedKube in memory, shared by every cluster: the manifests applied, the tokens issued, the enrolment ConfigMap. */
-export class FakeHostedKube implements IHostedKube, IHostedKubeFactory
+/** IHostedKube of one cluster over the shared FakeHostedKube. */
+export class FakeClusterKube implements IHostedKube
 {
-    public static readonly CertificateAuthorityData = Buffer.from('-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n').toString('base64')
-    public readonly Applied: { Cluster: string; Manifest: unknown }[] = []
-    public readonly Tokens: string[] = []
-    public Enrolled = true
-    public Polls = 0
-    private cluster = ''
-
-    public For(access: ClusterAccess): IHostedKube
+    public constructor(private readonly shared: FakeHostedKube, private readonly cluster: string)
     {
-        this.cluster = access.Name
-        return this
     }
 
     public Apply(manifest: unknown): Promise<void>
     {
-        this.Applied.push({ Cluster: this.cluster, Manifest: manifest })
+        this.shared.Applied.push({ Cluster: this.cluster, Manifest: manifest })
         return Promise.resolve()
     }
 
     public ConfigMapExists(): Promise<boolean>
     {
-        this.Polls += 1
-        return Promise.resolve(this.Enrolled)
+        this.shared.Polls += 1
+        return Promise.resolve(this.shared.Enrolled && !this.shared.NotEnrolled.has(this.cluster))
     }
 
     public CreateToken(): Promise<string>
     {
-        const token = 'token-' + (this.Tokens.length + 1)
-        this.Tokens.push(token)
+        if (this.shared.FailTokens)
+        {
+            return Promise.reject(new Error('TokenRequest refused'))
+        }
+        const token = 'token-' + (this.shared.Tokens.length + 1)
+        this.shared.Tokens.push(token)
         return Promise.resolve(token)
     }
 
     public CertificateAuthority(): Promise<string>
     {
         return Promise.resolve(FakeHostedKube.CertificateAuthorityData)
+    }
+}
+
+/** IHostedKube in memory, shared by every cluster: the manifests applied, the tokens issued, the enrolment ConfigMaps. */
+export class FakeHostedKube implements IHostedKubeFactory
+{
+    public static readonly CertificateAuthorityData = Buffer.from('-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n').toString('base64')
+    public readonly Applied: { Cluster: string; Manifest: unknown }[] = []
+    public readonly Tokens: string[] = []
+    /** Clusters whose hosted hive has not enrolled (yet). */
+    public readonly NotEnrolled = new Set<string>()
+    public Enrolled = true
+    public FailTokens = false
+    public Polls = 0
+
+    public For(access: ClusterAccess): IHostedKube
+    {
+        return new FakeClusterKube(this, access.Name)
+    }
+
+    /** A kube for tests that call it directly (cluster `direct`). */
+    public Direct(): IHostedKube
+    {
+        return new FakeClusterKube(this, 'direct')
     }
 
     /** The Secrets applied, as kind/name/namespace/data. */
@@ -114,18 +133,6 @@ export class FakeHostedKube implements IHostedKube, IHostedKubeFactory
     }
 }
 
-/** A delay that returns at once and counts its waits. */
-export class FakeDelay implements IDelay
-{
-    public Waits = 0
-
-    public Wait(): Promise<void>
-    {
-        this.Waits += 1
-        return Promise.resolve()
-    }
-}
-
 /** A port probe that reports the listed ports as taken by something else. */
 export class FakePortProbe implements IPortProbe
 {
@@ -137,29 +144,48 @@ export class FakePortProbe implements IPortProbe
     }
 }
 
-/** Every write fails from the `killAt`-th on (the first of them still lands): the process died right after it. */
+/** When the simulated process dies around its `killAt`-th write: right after it landed, or right before (it never lands). */
+export enum KillPoint
+{
+    AfterWrite = 'after',
+    BeforeWrite = 'before',
+}
+
+/**
+ * Every write fails from the `killAt`-th on: the process died right after that write landed (AfterWrite) or right
+ * before it (BeforeWrite: it never lands). Nothing written after the kill lands either.
+ */
 export class KillingStore extends PlacementStore
 {
     public static readonly Killed = 'killed'
-    private puts = 0
+    public Writes = 0
 
-    public constructor(files: TempState['Files'], private readonly killAt: number)
+    public constructor(files: TempState['Files'], private readonly killAt: number, private readonly point: KillPoint = KillPoint.AfterWrite)
     {
         super(files)
     }
 
     public override async Put(record: PlacementRecord): Promise<void>
     {
-        this.puts += 1
-        if (this.puts > this.killAt)
+        this.Writes += 1
+        if (this.Writes > this.killAt || (this.Writes === this.killAt && this.point === KillPoint.BeforeWrite))
         {
             throw new Error(KillingStore.Killed)
         }
         await super.Put(record)
-        if (this.puts === this.killAt)
+        if (this.Writes === this.killAt)
         {
             throw new Error(KillingStore.Killed)
         }
+    }
+
+    public override async Prune(record: PlacementRecord): Promise<void>
+    {
+        if (this.Writes >= this.killAt)
+        {
+            throw new Error(KillingStore.Killed)
+        }
+        await super.Prune(record)
     }
 }
 
@@ -183,7 +209,6 @@ export class PlacementFixture
     public readonly Driver = new FakeClusterDriver()
     public readonly Kube = new FakeHostedKube()
     public readonly Helm = new FakeProcessRunner()
-    public readonly Delay = new FakeDelay()
     public readonly Probe = new FakePortProbe()
     public Enrolment!: HostEnrolmentState
     public Channel!: HostChannel
@@ -225,14 +250,18 @@ export class PlacementFixture
             MeshAddress: PlacementFixture.Mesh,
             HiveSlots: options.Slots ?? 4,
             Clock: this.Platform.Clock,
-            Delay: this.Delay,
         })
     }
 
-    public static Place(id: string, version: string = PlacementFixture.Version, digest: string = PlacementFixture.Digest, code: string = 'one-time-code-' + id + '-0123456789'): PlacementRequest
+    public static Place(id: string, version: string = PlacementFixture.Version, digest: string = PlacementFixture.Digest, code: string = 'one-time-code-' + id + '-0123456789', placementVersion: number = 1): PlacementRequest
     {
         const F = PlacementFixture
-        return PlacementRequest.Place({ PlacementId: id, Tenant: F.Tenant, EnrolmentCode: code, EngineVersion: version, ChartDigest: digest, HiveHostName: F.HiveHost })
+        return PlacementRequest.Place({ PlacementId: id, Version: placementVersion, Tenant: F.Tenant, EnrolmentCode: code, EngineVersion: version, ChartDigest: digest, HiveHostName: F.HiveHost })
+    }
+
+    public static Remove(id: string, placementVersion: number = 2): PlacementRequest
+    {
+        return PlacementRequest.Remove(id, PlacementFixture.Tenant, placementVersion)
     }
 
     /** The helm argument vectors run, the program first. */

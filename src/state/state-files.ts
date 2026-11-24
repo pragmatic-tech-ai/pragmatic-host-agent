@@ -16,6 +16,8 @@ export class StateFiles
     private static readonly TempBytes = 6
     private static readonly Hex = 'hex'
     private static readonly NotFound = 'ENOENT'
+    private static readonly Exists = 'EEXIST'
+    private static readonly ExclusiveFlag = 'wx'
     private static readonly JsonIndent = 2
     private static readonly Newline = '\n'
 
@@ -79,12 +81,12 @@ export class StateFiles
         await mkdir(dirname(path), { recursive: true, mode: StateFiles.DirMode })
         try
         {
-            await writeFile(path, text, { encoding: StateFiles.Utf8, mode: StateFiles.FileMode, flag: 'wx' })
+            await writeFile(path, text, { encoding: StateFiles.Utf8, mode: StateFiles.FileMode, flag: StateFiles.ExclusiveFlag })
             return true
         }
         catch (error)
         {
-            if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+            if ((error as NodeJS.ErrnoException).code === StateFiles.Exists)
             {
                 return false
             }

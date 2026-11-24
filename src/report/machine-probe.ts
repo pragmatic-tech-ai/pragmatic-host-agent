@@ -37,6 +37,7 @@ export class DockerMachineProbe implements IMachineProbe
     private static readonly MiB = 1024 * 1024
     private static readonly GiB = 1024 * 1024 * 1024
     private static readonly MilliPerCpu = 1000
+    private static readonly InfoTimeoutMs = 30_000
 
     public constructor(private readonly runner: IProcessRunner, private readonly stateDir: string, private readonly memInfo: string = DockerMachineProbe.MemInfo)
     {
@@ -59,7 +60,7 @@ export class DockerMachineProbe implements IMachineProbe
     public async DockerInfo(): Promise<{ Cpus: number; MemoryBytes: number } | undefined>
     {
         const D = DockerMachineProbe
-        const result = await this.runner.Run(new ProcessCommand(D.Docker, D.InfoArgs))
+        const result = await this.runner.Run(new ProcessCommand(D.Docker, D.InfoArgs, undefined, D.InfoTimeoutMs))
         if (!result.Succeeded)
         {
             return undefined

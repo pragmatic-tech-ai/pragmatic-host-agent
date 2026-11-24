@@ -21,7 +21,7 @@ class FixedProbe implements IMachineProbe
 
 class FixedPlacements implements IPlacementSource
 {
-    public constructor(private readonly records: PlacementRecord[])
+    public constructor(private readonly records: PlacementRecord[], public readonly Unreadable: readonly string[] = [])
     {
     }
 
@@ -36,8 +36,8 @@ class ReportFixture
     public static Record(id: string, step: PlacementStep): PlacementRecord
     {
         const json: PlacementRecordJson = {
-            PlacementId: id, Tenant: 'acme', Step: step, EngineVersion: '0.1.0', ChartDigest: null, HiveHostName: null, InstalledVersion: null, InstalledDigest: null,
-            EnrolmentCode: null, Port: 16444, Rotation: 0, CredentialIssuedAt: null, Attempts: 0, PendingResult: null,
+            PlacementId: id, Tenant: 'acme', Version: 1, Step: step, EngineVersion: '0.1.0', ChartDigest: null, HiveHostName: null, InstalledVersion: null, InstalledDigest: null,
+            EnrolmentCode: null, Port: 16444, Rotation: 0, CredentialIssuedAt: null, EnrolmentDeadline: null, Attempts: 0, PendingResult: null,
         }
         return new PlacementRecord(json)
     }
@@ -65,10 +65,26 @@ describe('CapacityReporter', () =>
         assert.deepEqual(report.Placements.map(entry => entry.ToJson()), [
             { PlacementId: 'p1', State: PlacementState.Running },
             { PlacementId: 'p2', State: PlacementState.InstallingEngine },
-            { PlacementId: 'p4', State: PlacementState.Failed },
         ])
         // The report is what the strict codec takes (allocatable within capacity, closed shape).
         assert.deepEqual(HostReport.Parse(report.ToJson()).ToJson(), report.ToJson())
+    })
+
+    it('a failed placement is not reported as holding a slot; an unreadable placement file is reported failed', async () =>
+    {
+        const probe = new FixedProbe(new MachineSample(true, 8000, 16000, 9000, 500, 300))
+        const placements = new FixedPlacements([ReportFixture.Record('f1', PlacementStep.Failed), ReportFixture.Record('r1', PlacementStep.Removed)], ['broken'])
+        const report = await new CapacityReporter(probe, placements, 4, '0.1.0').Report()
+        assert.equal(report.Allocatable.CpuMillicores, 8000, 'every slot free')
+        assert.deepEqual(report.Placements.map(entry => entry.ToJson()), [{ PlacementId: 'broken', State: PlacementState.Failed }])
+    })
+
+    it('never drops a live placement for finished ones: at most the slot holders are listed', async () =>
+    {
+        const probe = new FixedProbe(new MachineSample(true, 8000, 16000, 9000, 500, 300))
+        const finished = Array.from({ length: 80 }, (_, index) => ReportFixture.Record('done-' + String(index).padStart(2, '0'), PlacementStep.Removed))
+        const report = await new CapacityReporter(probe, new FixedPlacements([...finished, ReportFixture.Record('zz-live', PlacementStep.Placed)]), 4, '0.1.0').Report()
+        assert.deepEqual(report.Placements.map(entry => entry.PlacementId), ['zz-live'])
     })
 
     it('a full machine reports its total slots and no allocatable CPU; Docker down or a full disk is unavailable', async () =>

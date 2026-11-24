@@ -46,8 +46,8 @@ export class RepeatingTask
 /**
  * The enrolled host's two loops (C5.1): the capacity report every 30 s on its own (so a placement that takes minutes
  * never makes the host look stale: the scheduler takes hosts reported within 2 min), and the placement work every
- * 30 s: pull, reconcile, send the pending results, rotate due credentials. A failing stage is logged by its message
- * and the others still run.
+ * 30 s: pull, start the placements' runs (in the background), send the pending results, rotate due credentials. A
+ * failing stage is logged by its message and the others still run.
  */
 export class HostAgentLoop
 {
@@ -95,7 +95,9 @@ export class HostAgentLoop
     {
         const H = HostAgentLoop
         await this.Guard(H.PullFailed, async () => { await this.puller.Pull() })
-        await this.Guard(H.ReconcileFailed, () => this.reconciler.RunAll())
+        // The runs go on in the background (one per placement): a slow install never holds up another placement's
+        // removal, the results or the rotations; a placement still running is taken up again on a later pass.
+        await this.Guard(H.ReconcileFailed, () => this.reconciler.Kick())
         await this.Guard(H.ResultsFailed, () => this.reconciler.SendResults())
         await this.Guard(H.RotationFailed, () => this.reconciler.RotateCredentials())
     }
