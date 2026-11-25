@@ -13,7 +13,7 @@ class DescriptorGoldenFixture
     public static readonly Here = dirname(fileURLToPath(import.meta.url))
     public static readonly App = ReleaseApp.HostAgent
     public static readonly Golden = join(DescriptorGoldenFixture.Here, '..', 'src', 'tests', 'fixtures', 'pragmatic-host-agent.component.json')
-    public static readonly PinnedDigest = 'sha256:83e7d918ed60b4f55d4aa2a6879d81820d4817c00c8e2e97254ded550ed46756'
+    public static readonly PinnedDigest = 'sha256:f0b38788f77d0eb4bdb3625a55917c9bd1cb51e947c353061d719ce9917aff13'
     public static readonly PackageJson = join(DescriptorGoldenFixture.Here, '..', 'package.json')
     public static readonly Utf8 = 'utf8'
 

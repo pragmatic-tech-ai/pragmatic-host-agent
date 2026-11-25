@@ -5,6 +5,7 @@
 | `src/bin/pragmatic-host-agentd.ts` | The entry: `HostAgentMain.Run(process.env)`, a failed start logged and exit 1. |
 | `src/host-agent-main.ts` | `HostAgentMain`: settings, the trust root file, the host key, the enrolment (retried while the platform is unavailable, any refusal stops the start), then the wiring of `HostAgentLoop` (kind driver, helm, kubectl, the vendored ingress manifest). |
 | `src/host-agent-loop.ts` | `HostAgentLoop`: two `RepeatingTask`s (one pass at a time each): the capacity report every 30 s on its own, and the placement work every 30 s (pull, start the placements' runs in the background, pending results, due credential rotations), each stage guarded and logged by its message. |
+| `src/host-agent-shutdown.ts` | `HostAgentShutdown`: on SIGTERM/SIGINT the loops and the heartbeat stop, the state lock is released while it is still ours, exit 0 (running steps are cut off; their records resume); a lock lost to another agent stops it with exit 1, lock untouched. A start finding a live lock waits for it to go stale (`StateLock.AcquireWhenFree`). |
 | `src/host-agent-component.ts` | `HostAgentComponent`: the component descriptor (option `core`: the `PRAGMATIC_HOST_*` settings and their defaults; no port, no storage). |
 | `src/release-components.ts` | `Components`: the descriptor source the image build reads. |
 | `src/settings/` | `HostSettings` (every setting checked at start; `HostSettingsError` names each missing or wrong one, the start-smoke refusal), `PortRange`. |

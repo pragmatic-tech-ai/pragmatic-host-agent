@@ -12,6 +12,7 @@ import { HostEnrolmentStore, type HostEnrolmentState } from './enrolment/host-en
 import { EngineInstaller } from './engine/engine-installer.js'
 import { HostAgentComponent } from './host-agent-component.js'
 import { HostAgentLoop, RepeatingTask } from './host-agent-loop.js'
+import { HostAgentShutdown } from './host-agent-shutdown.js'
 import { HostIdentity } from './identity/host-identity.js'
 import { KubectlHostedKubeFactory } from './kube/hosted-kube.js'
 import { PlacementPuller } from './placement/placement-puller.js'
@@ -42,8 +43,8 @@ export class TrustRootUnreadableError extends Error
  * The host agent (pragmatic-host-agentd): reads its settings, loads or creates the host key, enrols the machine once
  * (retrying while the platform is unreachable; a refused code stops the agent), then runs the report and placement
  * loops (HostAgentLoop) with the kind driver, helm and kubectl from its image. It holds the state directory's lock
- * (StateLock) from before the key is read until it exits: a second agent on the same directory refuses to start, and
- * one whose lock was taken over stops.
+ * (StateLock) from before the key is read until it exits: a second agent on the same directory waits until that lock goes
+ * stale, one whose lock was taken over stops, and a graceful stop (SIGTERM, SIGINT) releases it (HostAgentShutdown).
  */
 export class HostAgentMain
 {
@@ -76,19 +77,25 @@ export class HostAgentMain
         const files = new StateFiles(settings.StateDir)
         await files.EnsureDir()
         const lock = new StateLock(files)
-        await lock.Acquire()
+        // A lock left by a crashed agent goes stale within StaleMs: wait for it here rather than exit into docker's backoff.
+        const delay = new TimerDelay()
+        await lock.AcquireWhenFree(delay, logger)
+        const shutdown = new HostAgentShutdown(lock, logger).Install()
+        const heartbeat = new RepeatingTask(HostAgentLoop.IntervalMs, () => M.Heartbeat(lock, shutdown, logger))
+        shutdown.Add(heartbeat)
+        heartbeat.Start()
         const trustRoot = await M.TrustRoot(settings.TrustRootFile)
         const key = await HostIdentity.LoadOrCreate(files)
         const enrolment = new HostEnrolment({
             Key: key, Channel: new HttpAgentChannel(settings.ChannelUrl), Store: new HostEnrolmentStore(files, trustRoot), PinnedTrustRoot: trustRoot,
             MachineName: settings.MachineName, MeshAddress: settings.MeshAddress, AgentVersion: HostAgentComponent.Version, Clock: clock,
         })
-        const state = await M.Enrol(enrolment, new FileEnrolmentCodeSource(settings.EnrolmentCodeFile), logger, new TimerDelay())
+        const state = await M.Enrol(enrolment, new FileEnrolmentCodeSource(settings.EnrolmentCodeFile), logger, delay)
         const channel = new HostChannel(key, state, new HttpAgentChannel(state.ChannelUrl), clock)
         const loop = M.Wire(settings, files, state, channel, clock, logger)
         logger.Info(M.StartedLine, { [M.EventKey]: M.StartedEvent, [M.HostKey]: state.HostId })
+        shutdown.Add(loop)
         loop.Start()
-        new RepeatingTask(HostAgentLoop.IntervalMs, () => M.Heartbeat(lock, loop, logger)).Start()
         return loop
     }
 
@@ -115,7 +122,7 @@ export class HostAgentMain
     }
 
     /** Refreshes the lock; a lock taken over by another agent stops this one. */
-    public static async Heartbeat(lock: StateLock, loop: HostAgentLoop, logger: ILogger): Promise<void>
+    public static async Heartbeat(lock: StateLock, shutdown: HostAgentShutdown, logger: ILogger): Promise<void>
     {
         const M = HostAgentMain
         try
@@ -127,8 +134,7 @@ export class HostAgentMain
             if (error instanceof StateLockHeldError)
             {
                 logger.Error(M.LockLostLine, { [M.EventKey]: M.LockLostEvent })
-                loop.Stop()
-                process.exit(1)
+                shutdown.Abandon()
             }
         }
     }
