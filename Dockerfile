@@ -97,10 +97,6 @@ RUN set -eu; \
 
 FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
 ENV NODE_ENV=production
-# helm and kubectl (copied below) verify ghcr.io and the cluster's TLS against the system trust store; node:22-slim ships
-# none, so a Hosted placement's `helm` pull of the public engine chart failed with "certificate signed by unknown
-# authority" (C5.1 live finding, 2026-11-27). The CA bundle is the runtime's, not just the provisioning stage's.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 # The service runs as 10001 (uid and gid); the app tree is root's and read-only to it, but for the directories the render
 # option WritableDirs names.
 RUN groupadd --system --gid 10001 pragmatic && useradd --system --create-home --uid 10001 --gid 10001 pragmatic
