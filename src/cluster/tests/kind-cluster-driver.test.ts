@@ -11,6 +11,11 @@ class KindFixture
 {
     public static readonly Manifest = '/workspace/pragmatic-host-agent/vendor/ingress-nginx/deploy.yaml'
     public static readonly Spec = new ClusterSpec('pragmatic-hosted-p1', 16444, '100.64.0.7', 'acme-ab2c')
+
+    public static MarkerPath(state: TempState): string
+    {
+        return state.Files.Path('clusters', 'pragmatic-hosted-p1', 'created')
+    }
 }
 
 /** A config with one API-server flag, as lane b5's issuer flags will be added. */
@@ -50,11 +55,14 @@ describe('KindClusterDriver', () =>
         ])
         assert.equal(readFileSync(config, 'utf8'), new KindClusterConfig().Render(KindFixture.Spec))
         assert.ok(runner.Commands.every(command => command.Stdin === undefined))
+        assert.notEqual(await state.Files.ReadText(KindFixture.MarkerPath(state)), undefined)
     })
 
-    it('an existing cluster (a restart) is not created again: its kubeconfig is re-exported and the add-ons re-applied', async () =>
+    it('a fully built cluster (marker present, a restart) is not created again: its kubeconfig is re-exported and the add-ons re-applied', async () =>
     {
         const state = fresh()
+        await state.Files.EnsureDir('clusters', 'pragmatic-hosted-p1')
+        await state.Files.WriteText(KindFixture.MarkerPath(state), 'pragmatic-hosted-p1\n')
         const runner = new FakeProcessRunner().OnPrefix(['kind', 'get', 'clusters'], () => FakeProcessRunner.Ok('pragmatic-hive\npragmatic-hosted-p1\n'))
         await new KindClusterDriver(runner, state.Files, KindFixture.Manifest).Create(KindFixture.Spec)
         const kubeconfig = state.Files.Path('clusters', 'pragmatic-hosted-p1', 'kubeconfig')
@@ -64,6 +72,28 @@ describe('KindClusterDriver', () =>
             ['kubectl', '--kubeconfig', kubeconfig, 'apply', '-f', KindFixture.Manifest],
         ])
         assert.ok(!runner.Argvs.some(argv => argv[1] === 'create'))
+    })
+
+    it('a registered cluster without the marker is half-built (restart mid-create): it is deleted then recreated, and the marker is written', async () =>
+    {
+        const state = fresh()
+        const runner = new FakeProcessRunner().OnPrefix(['kind', 'get', 'clusters'], () => FakeProcessRunner.Ok('pragmatic-hive\npragmatic-hosted-p1\n'))
+        await new KindClusterDriver(runner, state.Files, KindFixture.Manifest).Create(KindFixture.Spec)
+        const deleteAt = runner.Argvs.findIndex(argv => argv[1] === 'delete' && argv[2] === 'cluster' && argv[4] === 'pragmatic-hosted-p1')
+        const createAt = runner.Argvs.findIndex(argv => argv[1] === 'create' && argv[2] === 'cluster')
+        assert.deepEqual(runner.Argvs[deleteAt], ['kind', 'delete', 'cluster', '--name', 'pragmatic-hosted-p1'])
+        assert.ok(deleteAt >= 0 && createAt > deleteAt)
+        assert.notEqual(await state.Files.ReadText(KindFixture.MarkerPath(state)), undefined)
+    })
+
+    it('a failing kind create leaves no marker', async () =>
+    {
+        const state = fresh()
+        const runner = new FakeProcessRunner()
+            .OnPrefix(['kind', 'get', 'clusters'], () => FakeProcessRunner.Ok('pragmatic-hive\n'))
+            .OnPrefix(['kind', 'create'], () => FakeProcessRunner.Fail('ERROR: failed to create cluster'))
+        await assert.rejects(new KindClusterDriver(runner, state.Files, KindFixture.Manifest).Create(KindFixture.Spec))
+        assert.equal(await state.Files.ReadText(KindFixture.MarkerPath(state)), undefined)
     })
 
     it('deletes the cluster and its files; a failing kind is an error naming the program', async () =>

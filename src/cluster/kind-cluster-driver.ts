@@ -11,6 +11,8 @@ import { KindClusterConfig } from './kind-cluster-config.js'
  * `kind get clusters` does not list it yet, else `kind export kubeconfig`), then ingress-nginx from the manifest
  * vendored in the image (`vendor/ingress-nginx/deploy.yaml`, controller v1.15.1, images by digest), its IngressClass made
  * the default, and its controller waited for. kind's own default StorageClass (`standard`, local-path) is kept.
+ * A `created` marker is written under `clusters/<name>/` only after `kind create --wait` returns 0; a cluster registered
+ * without the marker is half-built (a restart mid-create) and is deleted then recreated.
  */
 export class KindClusterDriver implements IClusterDriver
 {
@@ -18,6 +20,7 @@ export class KindClusterDriver implements IClusterDriver
     public static readonly ClustersDir = 'clusters'
     public static readonly ConfigFile = 'kind-config.yaml'
     public static readonly KubeconfigFile = 'kubeconfig'
+    public static readonly MarkerFile = 'created'
     public static readonly IngressManifest = 'vendor/ingress-nginx/deploy.yaml'
     /** kind waits up to 5 minutes for the control plane; its process is killed at 15. */
     public static readonly CreateTimeoutMs = 15 * 60 * 1000
@@ -44,6 +47,7 @@ export class KindClusterDriver implements IClusterDriver
     private static readonly FileFlag = '-f'
     private static readonly OverwriteFlag = '--overwrite'
     private static readonly NamespaceFlag = '--namespace'
+    private static readonly MarkerNewline = '\n'
     private static readonly Newline = /\r?\n/
     private static readonly Wait = '5m'
     private static readonly IngressNamespace = 'ingress-nginx'
@@ -65,15 +69,24 @@ export class KindClusterDriver implements IClusterDriver
         await this.files.EnsureDir(D.ClustersDir, spec.Name)
         const configPath = this.files.Path(D.ClustersDir, spec.Name, D.ConfigFile)
         const kubeconfig = this.KubeconfigOf(spec.Name)
-        if (await this.Exists(spec.Name))
+        const markerPath = this.MarkerOf(spec.Name)
+        const exists = await this.Exists(spec.Name)
+        const built = exists && (await this.files.ReadText(markerPath)) !== undefined
+        if (built)
         {
             await this.ExportKubeconfig(spec.Name, kubeconfig)
         }
         else
         {
+            if (exists)
+            {
+                await this.Delete(spec.Name)
+                await this.files.EnsureDir(D.ClustersDir, spec.Name)
+            }
             await this.files.WriteText(configPath, this.config.Render(spec))
             await this.run.Run(new ProcessCommand(D.KindProgram,
                 [D.Create, D.Cluster, D.NameFlag, spec.Name, D.ConfigFlag, configPath, D.KubeconfigFlag, kubeconfig, D.WaitFlag, D.Wait], undefined, D.CreateTimeoutMs))
+            await this.files.WriteText(markerPath, spec.Name + D.MarkerNewline)
         }
         await this.run.Run(new ProcessCommand(D.Kubectl, [D.KubeconfigFlag, kubeconfig, D.Apply, D.FileFlag, this.ingressManifest], undefined, D.ShortTimeoutMs))
         await this.run.Run(new ProcessCommand(D.Kubectl, [D.KubeconfigFlag, kubeconfig, D.Annotate, D.OverwriteFlag, D.IngressClass, D.DefaultClassAnnotation], undefined, D.ShortTimeoutMs))
@@ -109,6 +122,11 @@ export class KindClusterDriver implements IClusterDriver
     {
         const D = KindClusterDriver
         await this.run.Run(new ProcessCommand(D.KindProgram, [D.Export, D.KubeconfigVerb, D.NameFlag, name, D.KubeconfigFlag, kubeconfig], undefined, D.ShortTimeoutMs))
+    }
+
+    private MarkerOf(name: string): string
+    {
+        return this.files.Path(KindClusterDriver.ClustersDir, name, KindClusterDriver.MarkerFile)
     }
 
     private KubeconfigOf(name: string): string
