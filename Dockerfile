@@ -103,6 +103,7 @@ RUN groupadd --system --gid 10001 pragmatic && useradd --system --create-home --
 WORKDIR /workspace/pragmatic-host-agent
 
 FROM runtime AS pragmatic-host-agent
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=provisioning-tools /tools/kubectl /usr/local/bin/kubectl
 COPY --from=provisioning-tools /tools/kind /usr/local/bin/kind
 COPY --from=provisioning-tools /tools/docker-cli /usr/local/bin/docker
