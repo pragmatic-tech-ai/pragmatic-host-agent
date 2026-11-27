@@ -1,6 +1,6 @@
 {
   "name": "@pragmatic-tech-ai/pragmatic-host-agent",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "The host agent (pragmatic-host-agentd): enrols one of our hosting machines once, reports its capacity, and places, upgrades and removes Hosted hives on it (kind clusters, the engine chart, a sealed rotating cluster credential).",
   "license": "Apache-2.0",
